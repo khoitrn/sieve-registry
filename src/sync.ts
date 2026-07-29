@@ -1,4 +1,5 @@
-import { pruneSkillsNotIn, upsertSkill } from "./db";
+import { listAllSources, markSourceStatus, pruneSkillsNotIn, upsertSkill } from "./db";
+import { syncGenericSource } from "./scan";
 
 // The tunnel: pulls sieve.index.json + every skill body straight from
 // sieve's own repo (public, so no auth needed — same raw.githubusercontent.com
@@ -7,6 +8,7 @@ import { pruneSkillsNotIn, upsertSkill } from "./db";
 // exposed as an on-demand endpoint for an immediate refresh right after a push.
 
 const SIEVE_RAW_BASE = "https://raw.githubusercontent.com/khoitrn/sieve/main";
+export const SIEVE_SOURCE_ID = "github:khoitrn/sieve";
 
 interface SieveIndexSkill {
   name: string;
@@ -45,6 +47,7 @@ export async function syncFromSieveRepo(db: D1Database): Promise<SyncResult> {
     }
     const body = await bodyRes.text();
     await upsertSkill(db, {
+      source_id: SIEVE_SOURCE_ID,
       name: entry.name,
       category: entry.category,
       tier: entry.tier,
@@ -59,7 +62,37 @@ export async function syncFromSieveRepo(db: D1Database): Promise<SyncResult> {
 
   // Only prune using names we actually confirmed synced this run — a skill
   // that merely failed to fetch (skippedFailures) must not be deleted.
-  const removed = await pruneSkillsNotIn(db, [...synced, ...skippedFailures]);
+  const removed = await pruneSkillsNotIn(db, SIEVE_SOURCE_ID, [...synced, ...skippedFailures]);
 
   return { upserted: synced.length, removed, skippedFailures };
+}
+
+export interface SourceSyncSummary {
+  sourceId: string;
+  ok: boolean;
+  upserted?: number;
+  removed?: number;
+  error?: string;
+}
+
+// Runs every source through the right sync path (sieve's own
+// sieve.index.json shortcut, or the generic scanner for everything else).
+// One source's failure never blocks the rest.
+export async function syncAllSources(db: D1Database, githubToken: string | undefined): Promise<SourceSyncSummary[]> {
+  const sources = await listAllSources(db);
+  const summaries: SourceSyncSummary[] = [];
+
+  for (const source of sources) {
+    try {
+      const result =
+        source.id === SIEVE_SOURCE_ID ? await syncFromSieveRepo(db) : await syncGenericSource(db, source, githubToken);
+      await markSourceStatus(db, source.id, "active");
+      summaries.push({ sourceId: source.id, ok: true, upserted: result.upserted, removed: result.removed });
+    } catch (err) {
+      await markSourceStatus(db, source.id, "failed");
+      summaries.push({ sourceId: source.id, ok: false, error: (err as Error).message });
+    }
+  }
+
+  return summaries;
 }
