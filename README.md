@@ -16,6 +16,8 @@ stateful.
 - `GET /api/sources` — requires `Authorization`; curated sources plus the caller's own.
 - `POST /api/sources` — requires `Authorization`; body `{ repoUrl }`; registers a `kind: "user"` source scoped to the caller's GitHub login and syncs it immediately (generic `SKILL.md` scan — see below).
 - `DELETE /api/sources/:id` — requires `Authorization`; 403 unless the caller is the source's owner. Curated sources (`added_by = NULL`) can never be deleted this way.
+- `POST /api/my-skills` — requires `Authorization`; body `{ name, description, category?, tags?, body, version? }`. Hand-authored skills, not pulled from any repo — scoped to a virtual per-user source (`custom:<login>`) so the sync loop has nothing to walk; the caller is already the source of truth. `name` must be lowercase-hyphenated; skills are always forced to `tier: "catalog"`, same as the generic scanner.
+- `DELETE /api/my-skills/:name` — requires `Authorization`; only deletes from the caller's own authored source.
 - `POST /api/projects` — body `{ id, repo? }`, registers/updates a project
 - `POST /api/projects/:id/assign` — body `{ skills: [{ name, version, sourceId? }] }`, upserts assignment records (`sourceId` defaults to sieve's own source for older callers)
 - `GET /api/projects/:id/skills` — currently-assigned skills for a project
