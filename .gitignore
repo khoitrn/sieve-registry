@@ -1,0 +1,5 @@
+node_modules
+.wrangler
+*.tsbuildinfo
+.seed-token.local
+.dev.vars

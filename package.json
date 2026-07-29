@@ -1,0 +1,19 @@
+{
+  "name": "sieve-registry",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 execute sieve-registry --local --file=migrations/0001_init.sql",
+    "db:migrate:remote": "wrangler d1 execute sieve-registry --remote --file=migrations/0001_init.sql",
+    "db:seed": "node scripts/seed.mjs",
+    "db:seed:remote": "node scripts/seed.mjs --remote"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260716.1",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.114.0"
+  }
+}

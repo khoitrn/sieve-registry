@@ -1,0 +1,8 @@
+name = "sieve-registry"
+main = "src/index.ts"
+compatibility_date = "2026-07-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sieve-registry"
+database_id = "084a2438-8f1c-4f92-bae5-27bfaadfacef"
