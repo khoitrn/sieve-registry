@@ -16,7 +16,7 @@ stateful.
 - `POST /api/projects` — body `{ id, repo? }`, registers/updates a project
 - `POST /api/projects/:id/assign` — body `{ skills: [{ name, version }] }`, upserts assignment records
 - `GET /api/projects/:id/skills` — currently-assigned skills for a project
-- `POST /api/admin/seed` — body `{ skills: [...] }`, gated by `X-Seed-Token` header matching the `SEED_TOKEN` secret; loads/updates the catalog from `sieve`'s `sieve.index.json`
+- `POST /api/admin/sync` — gated by `X-Seed-Token` header matching the `SEED_TOKEN` secret; pulls `sieve.index.json` + every skill body straight from `raw.githubusercontent.com/khoitrn/sieve/main` and upserts into D1, pruning any skill no longer present upstream. Also runs on a Cron Trigger (`*/30 * * * *`, see `wrangler.toml`) so the catalog stays current automatically — this is the "tunnel" from `sieve`'s repo into the registry. Doubles as the initial seed (an empty table syncs in fully).
 
 No auth beyond the seed token in v1 — read-heavy, no user-identifying data
 beyond an opaque project id.
@@ -27,7 +27,7 @@ beyond an opaque project id.
 npm install
 npm run db:migrate        # applies migrations/0001_init.sql locally
 npm run dev                # wrangler dev, http://localhost:8787
-SEED_TOKEN=<value> npm run db:seed
+SEED_TOKEN=<value> curl -X POST http://localhost:8787/api/admin/sync -H "X-Seed-Token: $SEED_TOKEN"
 ```
 
 ## Deploy
@@ -36,6 +36,6 @@ SEED_TOKEN=<value> npm run db:seed
 npx wrangler d1 create sieve-registry     # once; paste the returned id into wrangler.toml
 npm run db:migrate:remote
 npx wrangler secret put SEED_TOKEN
-npm run deploy
-SEED_TOKEN=<value> SEED_URL=<deployed-url> npm run db:seed:remote
+npm run deploy                             # also activates the Cron Trigger
+SEED_TOKEN=<value> curl -X POST https://<deployed-url>/api/admin/sync -H "X-Seed-Token: $SEED_TOKEN"
 ```

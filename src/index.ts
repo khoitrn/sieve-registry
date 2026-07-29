@@ -1,9 +1,10 @@
-import { assignSkill, createProject, listAssignments, listSkills, upsertSkill } from "./db";
+import { assignSkill, createProject, listAssignments, listSkills } from "./db";
 import { recommend, type OnboardingAnswers } from "./recommend";
+import { syncFromSieveRepo } from "./sync";
 
 export interface Env {
   DB: D1Database;
-  SEED_TOKEN?: string; // required header to hit /api/admin/seed
+  SEED_TOKEN?: string; // required header to hit /api/admin/sync
 }
 
 function cors(res: Response): Response {
@@ -81,21 +82,29 @@ export default {
       return json(await listAssignments(env.DB, projectId));
     }
 
-    // POST /api/admin/seed — one-time/idempotent catalog load, gated by a shared token
-    if (pathname === "/api/admin/seed" && request.method === "POST") {
+    // POST /api/admin/sync — on-demand pull from sieve's repo (same thing the
+    // Cron Trigger runs periodically), gated by a shared token. Also doubles
+    // as the initial seed: an empty skills table syncs in fully.
+    if (pathname === "/api/admin/sync" && request.method === "POST") {
       if (!env.SEED_TOKEN || request.headers.get("X-Seed-Token") !== env.SEED_TOKEN) {
         return json({ error: "unauthorized" }, 401);
       }
-      let body: { skills?: Parameters<typeof upsertSkill>[1][] };
       try {
-        body = await request.json();
-      } catch {
-        return json({ error: "invalid_json" }, 400);
+        const result = await syncFromSieveRepo(env.DB);
+        return json({ ok: true, ...result });
+      } catch (err) {
+        return json({ error: "sync_failed", message: (err as Error).message }, 502);
       }
-      for (const s of body.skills ?? []) await upsertSkill(env.DB, s);
-      return json({ ok: true, count: body.skills?.length ?? 0 });
     }
 
     return json({ error: "not_found" }, 404);
+  },
+
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      syncFromSieveRepo(env.DB)
+        .then((r) => console.log(`[sieve-registry] scheduled sync: upserted ${r.upserted}, removed ${r.removed}, failed ${r.skippedFailures.length}`))
+        .catch((err) => console.error("[sieve-registry] scheduled sync failed:", err)),
+    );
   },
 } satisfies ExportedHandler<Env>;

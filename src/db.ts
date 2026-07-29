@@ -42,6 +42,18 @@ export async function upsertSkill(db: D1Database, skill: Omit<SkillRow, "tags" |
     .run();
 }
 
+// Removes any skill row whose name is no longer present upstream (e.g. a
+// skill deleted from sieve's sieve.index.json). Returns how many were removed.
+export async function pruneSkillsNotIn(db: D1Database, keepNames: string[]): Promise<number> {
+  if (keepNames.length === 0) return 0; // never wipe the table on an empty/failed fetch
+  const placeholders = keepNames.map((_, i) => `?${i + 1}`).join(", ");
+  const res = await db
+    .prepare(`DELETE FROM skills WHERE name NOT IN (${placeholders})`)
+    .bind(...keepNames)
+    .run();
+  return res.meta.changes ?? 0;
+}
+
 export async function createProject(db: D1Database, id: string, repo: string | null): Promise<void> {
   await db
     .prepare(`INSERT INTO projects (id, repo) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET repo = excluded.repo`)

@@ -2,6 +2,11 @@ name = "sieve-registry"
 main = "src/index.ts"
 compatibility_date = "2026-07-01"
 
+[triggers]
+# Pulls sieve.index.json + every skill body from github.com/khoitrn/sieve and
+# upserts into D1 — the "tunnel" keeping the registry current automatically.
+crons = ["*/30 * * * *"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "sieve-registry"

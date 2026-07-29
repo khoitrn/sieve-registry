@@ -7,9 +7,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "db:migrate": "wrangler d1 execute sieve-registry --local --file=migrations/0001_init.sql",
-    "db:migrate:remote": "wrangler d1 execute sieve-registry --remote --file=migrations/0001_init.sql",
-    "db:seed": "node scripts/seed.mjs",
-    "db:seed:remote": "node scripts/seed.mjs --remote"
+    "db:migrate:remote": "wrangler d1 execute sieve-registry --remote --file=migrations/0001_init.sql"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260716.1",
