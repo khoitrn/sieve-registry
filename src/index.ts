@@ -1,13 +1,17 @@
 import {
   assignSkill,
+  authoredSourceId,
   createProject,
   createSource,
+  deleteOwnSkill,
   deleteSource,
+  ensureAuthoredSource,
   listAssignments,
   listSkills,
   listVisibleSources,
   markSourceStatus,
   resolveSourceIds,
+  upsertSkill,
 } from "./db";
 import { bearerToken, resolveGithubUser } from "./github-identity";
 import { recommend, type OnboardingAnswers } from "./recommend";
@@ -112,6 +116,48 @@ export default {
       if (!login) return json({ error: "unauthorized" }, 401);
       const deleted = await deleteSource(env.DB, decodeURIComponent(sourceIdMatch[1]), login);
       if (!deleted) return json({ error: "forbidden_or_not_found" }, 403);
+      return json({ ok: true });
+    }
+
+    // POST /api/my-skills — body: { name, description, category?, tags?, body, version? }
+    // Hand-authored skills, scoped to the caller's GitHub login, not any repo.
+    if (pathname === "/api/my-skills" && request.method === "POST") {
+      const login = await callerLogin(request);
+      if (!login) return json({ error: "unauthorized" }, 401);
+      let body: { name?: string; description?: string; category?: string; tags?: string[]; body?: string; version?: string };
+      try {
+        body = await request.json();
+      } catch {
+        return json({ error: "invalid_json" }, 400);
+      }
+      if (!body.name || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(body.name)) {
+        return json({ error: "invalid_name", detail: "lowercase words joined by hyphens" }, 400);
+      }
+      if (!body.description) return json({ error: "missing_description" }, 400);
+      if (!body.body) return json({ error: "missing_body" }, 400);
+
+      const sourceId = await ensureAuthoredSource(env.DB, login);
+      await upsertSkill(env.DB, {
+        source_id: sourceId,
+        name: body.name,
+        category: body.category?.trim() || "personal",
+        tier: "catalog", // never let a user claim guardrail tier either
+        description: body.description,
+        tags: Array.isArray(body.tags) ? body.tags : [],
+        version: body.version?.trim() || "1.0.0",
+        last_reviewed: new Date().toISOString().slice(0, 10),
+        body: body.body,
+      });
+      return json({ ok: true, sourceId, name: body.name });
+    }
+
+    // DELETE /api/my-skills/:name — only from the caller's own authored source
+    const mySkillMatch = pathname.match(/^\/api\/my-skills\/(.+)$/);
+    if (mySkillMatch && request.method === "DELETE") {
+      const login = await callerLogin(request);
+      if (!login) return json({ error: "unauthorized" }, 401);
+      const deleted = await deleteOwnSkill(env.DB, authoredSourceId(login), decodeURIComponent(mySkillMatch[1]));
+      if (!deleted) return json({ error: "not_found" }, 404);
       return json({ ok: true });
     }
 

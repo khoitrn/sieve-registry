@@ -147,6 +147,31 @@ export async function deleteSource(db: D1Database, id: string, login: string): P
   return true;
 }
 
+// One per-user virtual source for hand-authored skills — no backing repo,
+// never scanned/synced (see sync.ts's "custom:" skip), just directly
+// written to. Scoped to the GitHub login, not any repo, per design.
+export function authoredSourceId(login: string): string {
+  return `custom:${login}`;
+}
+
+export async function ensureAuthoredSource(db: D1Database, login: string): Promise<string> {
+  const id = authoredSourceId(login);
+  await db
+    .prepare(
+      `INSERT INTO sources (id, repo_url, kind, added_by, status)
+       VALUES (?1, ?1, 'user', ?2, 'active')
+       ON CONFLICT(id) DO NOTHING`,
+    )
+    .bind(id, login)
+    .run();
+  return id;
+}
+
+export async function deleteOwnSkill(db: D1Database, sourceId: string, name: string): Promise<boolean> {
+  const res = await db.prepare(`DELETE FROM skills WHERE source_id = ?1 AND name = ?2`).bind(sourceId, name).run();
+  return (res.meta.changes ?? 0) > 0;
+}
+
 export async function createProject(db: D1Database, id: string, repo: string | null): Promise<void> {
   await db
     .prepare(`INSERT INTO projects (id, repo) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET repo = excluded.repo`)

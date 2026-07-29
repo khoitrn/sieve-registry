@@ -83,6 +83,12 @@ export async function syncAllSources(db: D1Database, githubToken: string | undef
   const summaries: SourceSyncSummary[] = [];
 
   for (const source of sources) {
+    // Hand-authored skills have no backing repo — they're already the
+    // source of truth, nothing to pull.
+    if (source.id.startsWith("custom:")) {
+      summaries.push({ sourceId: source.id, ok: true, upserted: 0, removed: 0 });
+      continue;
+    }
     try {
       const result =
         source.id === SIEVE_SOURCE_ID ? await syncFromSieveRepo(db) : await syncGenericSource(db, source, githubToken);
