@@ -9,14 +9,27 @@ export interface SkillRow {
   last_reviewed: string;
   body: string;
   updated_at: string;
+  blob_sha: string | null;
+  validated: number; // 0/1 — SQLite has no boolean column type
+  flagged: number; // 0/1 — result of security-scan.ts, a heuristic gate
+  flag_reason: string | null; // JSON-encoded string[] of reasons, or null
 }
 
-export interface Skill extends Omit<SkillRow, "tags"> {
+export interface Skill extends Omit<SkillRow, "tags" | "validated" | "flagged" | "flag_reason"> {
   tags: string[];
+  validated: boolean;
+  flagged: boolean;
+  flag_reason: string[];
 }
 
 function toSkill(row: SkillRow): Skill {
-  return { ...row, tags: JSON.parse(row.tags) };
+  return {
+    ...row,
+    tags: JSON.parse(row.tags),
+    validated: row.validated === 1,
+    flagged: row.flagged === 1,
+    flag_reason: row.flag_reason ? JSON.parse(row.flag_reason) : [],
+  };
 }
 
 // sourceIds: undefined -> all skills (used by admin/sync tooling only).
@@ -37,12 +50,17 @@ export async function listSkills(db: D1Database, sourceIds?: string[]): Promise<
 
 export async function upsertSkill(
   db: D1Database,
-  skill: Omit<SkillRow, "tags" | "updated_at"> & { tags: string[] },
+  skill: Omit<SkillRow, "tags" | "updated_at" | "validated" | "flagged" | "flag_reason"> & {
+    tags: string[];
+    validated: boolean;
+    flagged: boolean;
+    flag_reason: string[];
+  },
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO skills (source_id, name, category, tier, description, tags, version, last_reviewed, body, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))
+      `INSERT INTO skills (source_id, name, category, tier, description, tags, version, last_reviewed, body, blob_sha, validated, flagged, flag_reason, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now'))
        ON CONFLICT(source_id, name) DO UPDATE SET
          category = excluded.category,
          tier = excluded.tier,
@@ -51,6 +69,10 @@ export async function upsertSkill(
          version = excluded.version,
          last_reviewed = excluded.last_reviewed,
          body = excluded.body,
+         blob_sha = excluded.blob_sha,
+         validated = excluded.validated,
+         flagged = excluded.flagged,
+         flag_reason = excluded.flag_reason,
          updated_at = datetime('now')`,
     )
     .bind(
@@ -63,6 +85,10 @@ export async function upsertSkill(
       skill.version,
       skill.last_reviewed,
       skill.body,
+      skill.blob_sha,
+      skill.validated ? 1 : 0,
+      skill.flagged ? 1 : 0,
+      skill.flag_reason.length ? JSON.stringify(skill.flag_reason) : null,
     )
     .run();
 }
@@ -87,6 +113,7 @@ export interface SourceRow {
   status: string;
   last_synced_at: string | null;
   created_at: string;
+  pinned_sha: string | null; // curated sources only — see migration 0005
 }
 
 export async function listAllSources(db: D1Database): Promise<SourceRow[]> {
@@ -132,6 +159,18 @@ export async function markSourceStatus(db: D1Database, id: string, status: strin
     .prepare(`UPDATE sources SET status = ?2, last_synced_at = datetime('now') WHERE id = ?1`)
     .bind(id, status)
     .run();
+}
+
+// Advances a curated source's reviewed commit — a deliberate owner action
+// (see /api/admin/sources/:id/pin), never automatic. Returns false if the
+// source doesn't exist or isn't curated (pinning a self-service 'user'
+// source would be friction with no trust payoff — those stay unverified).
+export async function setPinnedSha(db: D1Database, id: string, sha: string): Promise<boolean> {
+  const res = await db
+    .prepare(`UPDATE sources SET pinned_sha = ?2 WHERE id = ?1 AND kind = 'curated'`)
+    .bind(id, sha)
+    .run();
+  return (res.meta.changes ?? 0) > 0;
 }
 
 // Returns true if the source (and its skills) were deleted; false if it
@@ -203,4 +242,27 @@ export async function listAssignments(db: D1Database, projectId: string): Promis
     .bind(projectId)
     .all<AssignmentRow>();
   return res.results ?? [];
+}
+
+export interface BundleRow {
+  id: string;
+  name: string;
+  description: string;
+  skill_names: string; // JSON-encoded string[]
+  match_tags: string; // JSON-encoded string[]
+}
+
+export interface Bundle extends Omit<BundleRow, "skill_names" | "match_tags"> {
+  skill_names: string[];
+  match_tags: string[];
+}
+
+function toBundle(row: BundleRow): Bundle {
+  return { ...row, skill_names: JSON.parse(row.skill_names), match_tags: JSON.parse(row.match_tags) };
+}
+
+// Curated only — no user-submitted bundles, so no ownership scoping needed.
+export async function listBundles(db: D1Database): Promise<Bundle[]> {
+  const res = await db.prepare("SELECT * FROM bundles ORDER BY id").all<BundleRow>();
+  return (res.results ?? []).map(toBundle);
 }

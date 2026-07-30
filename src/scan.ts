@@ -1,4 +1,5 @@
 import { pruneSkillsNotIn, upsertSkill, type SourceRow } from "./db";
+import { scanSkillBody } from "./security-scan";
 
 // Generic tunnel for sources that don't publish sieve.index.json (i.e.
 // everything except sieve itself) — walks the repo tree for any SKILL.md,
@@ -62,22 +63,45 @@ function ghHeaders(githubToken?: string): HeadersInit {
   return headers;
 }
 
-async function getDefaultBranch(owner: string, repo: string, githubToken?: string): Promise<string> {
+export async function getDefaultBranch(owner: string, repo: string, githubToken?: string): Promise<string> {
   const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers: ghHeaders(githubToken) });
   if (!res.ok) throw new Error(`repo lookup ${owner}/${repo} -> ${res.status}`);
   const data = (await res.json()) as { default_branch?: string };
   return data.default_branch ?? "main";
 }
 
-async function listSkillMdPaths(owner: string, repo: string, branch: string, githubToken?: string): Promise<string[]> {
+export async function getCurrentCommitSha(owner: string, repo: string, ref: string, githubToken?: string): Promise<string> {
+  const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/commits/${ref}`, { headers: ghHeaders(githubToken) });
+  if (!res.ok) throw new Error(`commit lookup ${owner}/${repo}@${ref} -> ${res.status}`);
+  const data = (await res.json()) as { sha?: string };
+  if (!data.sha) throw new Error(`commit lookup ${owner}/${repo}@${ref} returned no sha`);
+  return data.sha;
+}
+
+// Curated sources sync at a specific, human-reviewed commit (pinned_sha) so
+// a later compromise of the upstream repo can't reach the registry without
+// a deliberate re-review. 'user' sources (self-service, already surfaced as
+// unverified) and curated sources with no pin yet fall back to whatever the
+// default branch currently is — unchanged, pre-pinning behavior.
+async function resolveRef(source: SourceRow, owner: string, repo: string, githubToken?: string): Promise<string> {
+  if (source.kind === "curated" && source.pinned_sha) return source.pinned_sha;
+  return getDefaultBranch(owner, repo, githubToken);
+}
+
+interface SkillMdEntry {
+  path: string;
+  sha: string;
+}
+
+async function listSkillMdEntries(owner: string, repo: string, branch: string, githubToken?: string): Promise<SkillMdEntry[]> {
   const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`, {
     headers: ghHeaders(githubToken),
   });
   if (!res.ok) throw new Error(`tree lookup ${owner}/${repo}@${branch} -> ${res.status}`);
-  const data = (await res.json()) as { tree?: { path: string; type: string }[] };
+  const data = (await res.json()) as { tree?: { path: string; type: string; sha: string }[] };
   return (data.tree ?? [])
     .filter((e) => e.type === "blob" && e.path.endsWith("SKILL.md"))
-    .map((e) => e.path)
+    .map((e) => ({ path: e.path, sha: e.sha }))
     .slice(0, MAX_FILES_PER_SOURCE);
 }
 
@@ -85,6 +109,7 @@ export interface ScanResult {
   upserted: number;
   removed: number;
   skippedFailures: string[];
+  flagged: string[];
 }
 
 export async function syncGenericSource(db: D1Database, source: SourceRow, githubToken?: string): Promise<ScanResult> {
@@ -92,14 +117,15 @@ export async function syncGenericSource(db: D1Database, source: SourceRow, githu
   if (!parsed) throw new Error(`unparseable repo_url: ${source.repo_url}`);
   const { owner, repo } = parsed;
 
-  const branch = await getDefaultBranch(owner, repo, githubToken);
-  const paths = await listSkillMdPaths(owner, repo, branch, githubToken);
+  const ref = await resolveRef(source, owner, repo, githubToken);
+  const entries = await listSkillMdEntries(owner, repo, ref, githubToken);
 
   const synced: string[] = [];
   const skippedFailures: string[] = [];
+  const flagged: string[] = [];
 
-  for (const path of paths) {
-    const rawRes = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`);
+  for (const { path, sha } of entries) {
+    const rawRes = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${path}`);
     if (!rawRes.ok) {
       skippedFailures.push(path);
       continue;
@@ -113,6 +139,8 @@ export async function syncGenericSource(db: D1Database, source: SourceRow, githu
     const { fm } = parsedFm;
     const name: string = fm.name ?? skillNameFromPath(path);
     const description: string = fm.description ?? "";
+    const scan = scanSkillBody(text);
+    if (scan.flagged) flagged.push(name);
     await upsertSkill(db, {
       source_id: source.id,
       name,
@@ -120,13 +148,20 @@ export async function syncGenericSource(db: D1Database, source: SourceRow, githu
       tier: "catalog", // never trust a non-sieve source to declare guardrail tier
       description,
       tags: fm.tags ? fm.tags.split(/[,\s]+/).filter(Boolean) : [],
-      version: fm.version ?? "external",
+      // Prefer the author's own version string; fall back to the blob's git
+      // sha (short form) rather than a fixed "external" that made every
+      // unversioned skill from every connected source indistinguishable.
+      version: fm.version || sha.slice(0, 12),
       last_reviewed: new Date().toISOString().slice(0, 10),
       body: text,
+      blob_sha: sha,
+      validated: false, // generic scan, never run through validate-skill.mjs
+      flagged: scan.flagged,
+      flag_reason: scan.reasons,
     });
     synced.push(name);
   }
 
   const removed = await pruneSkillsNotIn(db, source.id, synced);
-  return { upserted: synced.length, removed, skippedFailures };
+  return { upserted: synced.length, removed, skippedFailures, flagged };
 }

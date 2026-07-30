@@ -6,16 +6,20 @@ import {
   deleteOwnSkill,
   deleteSource,
   ensureAuthoredSource,
+  listAllSources,
   listAssignments,
+  listBundles,
   listSkills,
   listVisibleSources,
   markSourceStatus,
   resolveSourceIds,
+  setPinnedSha,
   upsertSkill,
 } from "./db";
 import { bearerToken, resolveGithubUser } from "./github-identity";
 import { recommend, type OnboardingAnswers } from "./recommend";
-import { parseRepoUrl, syncGenericSource } from "./scan";
+import { getCurrentCommitSha, getDefaultBranch, parseRepoUrl, syncGenericSource } from "./scan";
+import { scanSkillBody } from "./security-scan";
 import { SIEVE_SOURCE_ID, syncAllSources } from "./sync";
 
 export interface Env {
@@ -59,7 +63,7 @@ export default {
       return json(await listSkills(env.DB, sourceIds));
     }
 
-    // POST /api/recommend — body: OnboardingAnswers -> { guardrails, recommended }
+    // POST /api/recommend — body: OnboardingAnswers -> { guardrails, recommended, bundle? }
     if (pathname === "/api/recommend" && request.method === "POST") {
       let answers: OnboardingAnswers;
       try {
@@ -72,8 +76,15 @@ export default {
       }
       const login = await callerLogin(request);
       const sourceIds = await resolveSourceIds(env.DB, login);
-      const skills = await listSkills(env.DB, sourceIds);
-      return json(recommend(skills, { mode: answers.mode, focus: Array.isArray(answers.focus) ? answers.focus : [] }));
+      const [skills, bundles] = await Promise.all([listSkills(env.DB, sourceIds), listBundles(env.DB)]);
+      return json(recommend(skills, { mode: answers.mode, focus: Array.isArray(answers.focus) ? answers.focus : [] }, bundles));
+    }
+
+    // GET /api/bundles — curated groups of skills known to work well together.
+    // No auth/scoping: bundles are curated only, same visibility as the
+    // curated skill catalog.
+    if (pathname === "/api/bundles" && request.method === "GET") {
+      return json(await listBundles(env.DB));
     }
 
     // GET /api/sources — curated sources plus the caller's own (requires auth)
@@ -100,7 +111,11 @@ export default {
       const id = `github:${parsed.owner}/${parsed.repo}`;
       await createSource(env.DB, id, body.repoUrl, login);
       try {
-        const result = await syncGenericSource(env.DB, { id, repo_url: body.repoUrl, kind: "user", added_by: login, status: "active", last_synced_at: null, created_at: "" }, env.GITHUB_TOKEN);
+        const result = await syncGenericSource(
+          env.DB,
+          { id, repo_url: body.repoUrl, kind: "user", added_by: login, status: "active", last_synced_at: null, created_at: "", pinned_sha: null },
+          env.GITHUB_TOKEN,
+        );
         await markSourceStatus(env.DB, id, "active");
         return json({ ok: true, id, status: "active", ...result });
       } catch (err) {
@@ -137,6 +152,7 @@ export default {
       if (!body.body) return json({ error: "missing_body" }, 400);
 
       const sourceId = await ensureAuthoredSource(env.DB, login);
+      const scan = scanSkillBody(body.body);
       await upsertSkill(env.DB, {
         source_id: sourceId,
         name: body.name,
@@ -147,8 +163,12 @@ export default {
         version: body.version?.trim() || "1.0.0",
         last_reviewed: new Date().toISOString().slice(0, 10),
         body: body.body,
+        blob_sha: null, // no backing repo — hand-authored, not scanned from a git tree
+        validated: false, // self-attested, never run through validate-skill.mjs
+        flagged: scan.flagged,
+        flag_reason: scan.reasons,
       });
-      return json({ ok: true, sourceId, name: body.name });
+      return json({ ok: true, sourceId, name: body.name, flagged: scan.flagged, flag_reason: scan.reasons });
     }
 
     // DELETE /api/my-skills/:name — only from the caller's own authored source
@@ -207,6 +227,42 @@ export default {
       }
       const summaries = await syncAllSources(env.DB, env.GITHUB_TOKEN);
       return json({ ok: true, sources: summaries });
+    }
+
+    // POST /api/admin/sources/:id/pin — advance a curated source's reviewed
+    // commit. Body { "sha": "<commit sha>" } to pin an exact reviewed
+    // commit, or an empty body to pin at whatever the default branch
+    // currently resolves to. Deliberately manual — no auto-advance path —
+    // this is the human-review gate the pinning exists for.
+    const pinMatch = pathname.match(/^\/api\/admin\/sources\/([^/]+)\/pin$/);
+    if (pinMatch && request.method === "POST") {
+      if (!env.SEED_TOKEN || request.headers.get("X-Seed-Token") !== env.SEED_TOKEN) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      const sourceId = decodeURIComponent(pinMatch[1]);
+      const source = (await listAllSources(env.DB)).find((s) => s.id === sourceId);
+      if (!source) return json({ error: "not_found" }, 404);
+      if (source.kind !== "curated") return json({ error: "not_curated" }, 400);
+      const parsed = parseRepoUrl(source.repo_url);
+      if (!parsed) return json({ error: "unparseable_repo_url" }, 400);
+
+      let body: { sha?: string } = {};
+      try {
+        const raw = await request.text();
+        if (raw) body = JSON.parse(raw);
+      } catch {
+        return json({ error: "invalid_json" }, 400);
+      }
+
+      let sha = body.sha;
+      if (!sha) {
+        const branch = await getDefaultBranch(parsed.owner, parsed.repo, env.GITHUB_TOKEN);
+        sha = await getCurrentCommitSha(parsed.owner, parsed.repo, branch, env.GITHUB_TOKEN);
+      }
+
+      const ok = await setPinnedSha(env.DB, sourceId, sha);
+      if (!ok) return json({ error: "pin_failed" }, 500);
+      return json({ ok: true, sourceId, pinned_sha: sha });
     }
 
     return json({ error: "not_found" }, 404);

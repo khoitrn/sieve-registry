@@ -1,5 +1,6 @@
 import { listAllSources, markSourceStatus, pruneSkillsNotIn, upsertSkill } from "./db";
 import { syncGenericSource } from "./scan";
+import { scanSkillBody } from "./security-scan";
 
 // The tunnel: pulls sieve.index.json + every skill body straight from
 // sieve's own repo (public, so no auth needed — same raw.githubusercontent.com
@@ -29,6 +30,7 @@ export interface SyncResult {
   upserted: number;
   removed: number;
   skippedFailures: string[];
+  flagged: string[];
 }
 
 export async function syncFromSieveRepo(db: D1Database): Promise<SyncResult> {
@@ -38,6 +40,7 @@ export async function syncFromSieveRepo(db: D1Database): Promise<SyncResult> {
 
   const skippedFailures: string[] = [];
   const synced: string[] = [];
+  const flagged: string[] = [];
 
   for (const entry of index.skills) {
     const bodyRes = await fetch(`${SIEVE_RAW_BASE}/${entry.url}`);
@@ -46,6 +49,10 @@ export async function syncFromSieveRepo(db: D1Database): Promise<SyncResult> {
       continue;
     }
     const body = await bodyRes.text();
+    // Scanned even though this path is gated by validate-skill.mjs in CI —
+    // defense in depth, not a substitute for that gate.
+    const scan = scanSkillBody(body);
+    if (scan.flagged) flagged.push(entry.name);
     await upsertSkill(db, {
       source_id: SIEVE_SOURCE_ID,
       name: entry.name,
@@ -56,6 +63,10 @@ export async function syncFromSieveRepo(db: D1Database): Promise<SyncResult> {
       version: entry.version,
       last_reviewed: entry.last_reviewed,
       body,
+      blob_sha: null, // sieve.index.json doesn't carry a per-file git sha
+      validated: true, // this path only ever ingests sieve's own repo, gated by validate-skill.mjs in CI
+      flagged: scan.flagged,
+      flag_reason: scan.reasons,
     });
     synced.push(entry.name);
   }
@@ -64,7 +75,7 @@ export async function syncFromSieveRepo(db: D1Database): Promise<SyncResult> {
   // that merely failed to fetch (skippedFailures) must not be deleted.
   const removed = await pruneSkillsNotIn(db, SIEVE_SOURCE_ID, [...synced, ...skippedFailures]);
 
-  return { upserted: synced.length, removed, skippedFailures };
+  return { upserted: synced.length, removed, skippedFailures, flagged };
 }
 
 export interface SourceSyncSummary {
@@ -72,6 +83,7 @@ export interface SourceSyncSummary {
   ok: boolean;
   upserted?: number;
   removed?: number;
+  flagged?: string[];
   error?: string;
 }
 
@@ -86,14 +98,17 @@ export async function syncAllSources(db: D1Database, githubToken: string | undef
     // Hand-authored skills have no backing repo — they're already the
     // source of truth, nothing to pull.
     if (source.id.startsWith("custom:")) {
-      summaries.push({ sourceId: source.id, ok: true, upserted: 0, removed: 0 });
+      summaries.push({ sourceId: source.id, ok: true, upserted: 0, removed: 0, flagged: [] });
       continue;
     }
     try {
       const result =
         source.id === SIEVE_SOURCE_ID ? await syncFromSieveRepo(db) : await syncGenericSource(db, source, githubToken);
       await markSourceStatus(db, source.id, "active");
-      summaries.push({ sourceId: source.id, ok: true, upserted: result.upserted, removed: result.removed });
+      if (result.flagged.length) {
+        console.warn(`[sieve-registry] security-scan flagged ${result.flagged.length} skill(s) in ${source.id}: ${result.flagged.join(", ")}`);
+      }
+      summaries.push({ sourceId: source.id, ok: true, upserted: result.upserted, removed: result.removed, flagged: result.flagged });
     } catch (err) {
       await markSourceStatus(db, source.id, "failed");
       summaries.push({ sourceId: source.id, ok: false, error: (err as Error).message });
