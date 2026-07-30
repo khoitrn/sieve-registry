@@ -14,6 +14,7 @@ import {
   markSourceStatus,
   resolveSourceIds,
   setPinnedSha,
+  unassignSkill,
   upsertSkill,
 } from "./db";
 import { bearerToken, resolveGithubUser } from "./github-identity";
@@ -210,6 +211,17 @@ export default {
         if (s.name && s.version) await assignSkill(env.DB, projectId, s.sourceId ?? SIEVE_SOURCE_ID, s.name, s.version);
       }
       return json({ ok: true });
+    }
+
+    // DELETE /api/projects/:id/assign/:name — drop one skill from a project's
+    // assignment (used by `sieve remove`), so the dashboard doesn't drift from
+    // what's actually on disk.
+    const unassignMatch = pathname.match(/^\/api\/projects\/([^/]+)\/assign\/([^/]+)$/);
+    if (unassignMatch && request.method === "DELETE") {
+      const projectId = decodeURIComponent(unassignMatch[1]);
+      const skillName = decodeURIComponent(unassignMatch[2]);
+      const removed = await unassignSkill(env.DB, projectId, skillName);
+      return json({ removed });
     }
 
     // GET /api/projects/:id/skills — what's currently assigned

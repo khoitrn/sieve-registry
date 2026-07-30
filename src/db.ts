@@ -229,6 +229,11 @@ export async function assignSkill(db: D1Database, projectId: string, sourceId: s
     .run();
 }
 
+export async function unassignSkill(db: D1Database, projectId: string, skillName: string): Promise<boolean> {
+  const r = await db.prepare(`DELETE FROM assignments WHERE project_id = ?1 AND skill_name = ?2`).bind(projectId, skillName).run();
+  return (r.meta.changes ?? 0) > 0;
+}
+
 export interface AssignmentRow {
   source_id: string;
   skill_name: string;
