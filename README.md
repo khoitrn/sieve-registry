@@ -41,6 +41,24 @@ setting once there's more than one or two non-curated sources
 (`npx wrangler secret put GITHUB_TOKEN`, a personal access token with no
 special scopes needed for public repos).
 
+## Check your own project (no dashboard UI yet)
+
+There's no web dashboard in this repo — just the API above. Until one
+exists, this is how to see what a project actually has assigned, straight
+from the data `sieve init`/`add`/`remove` already write to the registry:
+
+```
+# projectId is the "projectId" field in that project's own .sieve/project.json
+curl https://sieve-registry.khoitrn.workers.dev/api/projects/<projectId>/skills
+```
+
+Returns the current assignment list (name, version, source) for that
+project. There's no login/ownership check on this route today — anyone
+with the `projectId` can read it, and it's a random UUID generated locally
+by `sieve init`, not a secret derived from your GitHub identity, so treat
+it like a bearer token: don't publish a project's `.sieve/project.json`
+somewhere public if you'd rather its assignment history stayed private.
+
 ## Develop
 
 ```
