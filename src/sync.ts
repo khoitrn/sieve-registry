@@ -1,4 +1,4 @@
-import { listAllSources, markSourceStatus, pruneSkillsNotIn, upsertSkill } from "./db";
+import { SIEVE_SOURCE_ID, listAllSources, markSourceStatus, pruneSkillsNotIn, upsertSkill } from "./db";
 import { syncGenericSource } from "./scan";
 import { scanSkillBody } from "./security-scan";
 
@@ -9,7 +9,7 @@ import { scanSkillBody } from "./security-scan";
 // exposed as an on-demand endpoint for an immediate refresh right after a push.
 
 const SIEVE_RAW_BASE = "https://raw.githubusercontent.com/khoitrn/sieve/main";
-export const SIEVE_SOURCE_ID = "github:khoitrn/sieve";
+export { SIEVE_SOURCE_ID };
 
 interface SieveIndexSkill {
   name: string;

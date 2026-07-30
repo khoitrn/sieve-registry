@@ -1,3 +1,8 @@
+// Sieve's own curated catalog. Defined here (the lowest-level module) so
+// listSkills can reference it for collision precedence without a circular
+// import; sync.ts re-exports this for its own sync-path usage.
+export const SIEVE_SOURCE_ID = "github:khoitrn/sieve";
+
 export interface SkillRow {
   source_id: string;
   name: string;
@@ -32,20 +37,44 @@ function toSkill(row: SkillRow): Skill {
   };
 }
 
+// Two sources publishing a skill with the same name is possible (a
+// connected source using a common skill name like "grill-me") and, left
+// unresolved, would silently collide downstream — recommend() returning
+// both, or a client-side `Map` keyed by name picking whichever happened to
+// come last. Sieve's own reviewed catalog always wins that tie; any other
+// collision keeps whichever row sorted first (stable, if arbitrary). Either
+// way the collision is logged instead of disappearing silently.
+function dedupeByName(skills: Skill[]): Skill[] {
+  const bestByName = new Map<string, Skill>();
+  for (const skill of skills) {
+    const existing = bestByName.get(skill.name);
+    if (!existing) {
+      bestByName.set(skill.name, skill);
+      continue;
+    }
+    const keepExisting = existing.source_id === SIEVE_SOURCE_ID || skill.source_id !== SIEVE_SOURCE_ID;
+    const winner = keepExisting ? existing : skill;
+    const loser = keepExisting ? skill : existing;
+    console.warn(`[sieve-registry] name collision on "${skill.name}": keeping ${winner.source_id}, dropping ${loser.source_id}`);
+    bestByName.set(skill.name, winner);
+  }
+  return [...bestByName.values()];
+}
+
 // sourceIds: undefined -> all skills (used by admin/sync tooling only).
 // [] -> no skills (a caller with zero eligible sources). Otherwise scoped.
 export async function listSkills(db: D1Database, sourceIds?: string[]): Promise<Skill[]> {
   if (sourceIds && sourceIds.length === 0) return [];
   if (!sourceIds) {
     const res = await db.prepare("SELECT * FROM skills ORDER BY category, name").all<SkillRow>();
-    return (res.results ?? []).map(toSkill);
+    return dedupeByName((res.results ?? []).map(toSkill));
   }
   const placeholders = sourceIds.map((_, i) => `?${i + 1}`).join(", ");
   const res = await db
     .prepare(`SELECT * FROM skills WHERE source_id IN (${placeholders}) ORDER BY category, name`)
     .bind(...sourceIds)
     .all<SkillRow>();
-  return (res.results ?? []).map(toSkill);
+  return dedupeByName((res.results ?? []).map(toSkill));
 }
 
 export async function upsertSkill(
