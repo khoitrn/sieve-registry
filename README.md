@@ -65,7 +65,7 @@ somewhere public if you'd rather its assignment history stayed private.
 
 - **[sieve](https://github.com/khoitrn/sieve)** — the npm package (`npx sievekit init`). Start here.
 - **sieve-registry** (this repo) — the Worker + D1 API above.
-- **[sieve-dashboard](https://github.com/khoitrn/sieve-dashboard)** — the hosted UI on top of this API, at [sieve.khoitrn.com](https://sieve.khoitrn.com).
+- **[sieve-dashboard](https://github.com/khoitrn/sieve-dashboard)** — a self-hosted browser UI on top of this API; see its [Setup guide](https://github.com/khoitrn/sieve-dashboard#setup-run-your-own-copy) to run your own copy.
 
 ## Develop
 
