@@ -9,9 +9,9 @@ Cloudflare Worker + D1 database that `sievekit init` pulls a recommended
 skill shortlist from, instead of always copying the entire bundled catalog.
 
 Separate repo from `sieve` (the npm package, zero runtime deps, must keep
-working offline) and from `sieve-dashboard` (explicitly no-database,
-read-only) on purpose — this is the one piece of the three that's actually
-stateful.
+working offline) and from [`sieve-dashboard`](https://github.com/khoitrn/sieve-dashboard)
+(explicitly no-database, read-only) on purpose — this is the one piece of
+the three that's actually stateful.
 
 ## API
 
@@ -41,11 +41,13 @@ setting once there's more than one or two non-curated sources
 (`npx wrangler secret put GITHUB_TOKEN`, a personal access token with no
 special scopes needed for public repos).
 
-## Check your own project (no dashboard UI yet)
+## Check your own project (no assignments view yet)
 
-There's no web dashboard in this repo — just the API above. Until one
-exists, this is how to see what a project actually has assigned, straight
-from the data `sieve init`/`add`/`remove` already write to the registry:
+[sieve-dashboard](https://github.com/khoitrn/sieve-dashboard) covers
+Library/Sources/Custom, but has no view yet for a specific project's
+assignment history. Until one exists, this is how to see what a project
+actually has assigned, straight from the data `sieve init`/`add`/`remove`
+already write to the registry:
 
 ```
 # projectId is the "projectId" field in that project's own .sieve/project.json
@@ -58,6 +60,12 @@ with the `projectId` can read it, and it's a random UUID generated locally
 by `sieve init`, not a secret derived from your GitHub identity, so treat
 it like a bearer token: don't publish a project's `.sieve/project.json`
 somewhere public if you'd rather its assignment history stayed private.
+
+## Related projects
+
+- **[sieve](https://github.com/khoitrn/sieve)** — the npm package (`npx sievekit init`). Start here.
+- **sieve-registry** (this repo) — the Worker + D1 API above.
+- **[sieve-dashboard](https://github.com/khoitrn/sieve-dashboard)** — the hosted UI on top of this API, at [sieve.khoitrn.com](https://sieve.khoitrn.com).
 
 ## Develop
 
